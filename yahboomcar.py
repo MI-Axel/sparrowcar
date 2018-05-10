@@ -24,6 +24,7 @@ class Vehicle():
         self.on = True
         self.carspeed = speed
         self.carstatus = enSTOP
+        self.infrared_avoid_value = ''
 
         #设置GPIO口为BCM编码方式
         GPIO.setmode(GPIO.BCM)
@@ -54,6 +55,9 @@ class Vehicle():
         self.buzzer = 8
         #灭火电机引脚设置
         self.OutfirePin = 2
+        # Camera servo pin configuration
+        self.CamHorPin = 11
+        self.CamVerPin = 9
         #循迹红外引脚定义
         #TrackSensorLeftPin1 TrackSensorLeftPin2 TrackSensorRightPin1 TrackSensorRightPin2
         #      3                 5                  4                   18
@@ -80,6 +84,8 @@ class Vehicle():
         GPIO.setup(self.LED_G, GPIO.OUT)
         GPIO.setup(self.LED_B, GPIO.OUT)
         GPIO.setup(self.ServoPin, GPIO.OUT)
+        GPIO.setup(self.CamHorPin, GPIO.OUT)
+        GPIO.setup(self.CamVerPin, GPIO.OUT)
         GPIO.setup(self.AvoidSensorLeft,GPIO.IN)
         GPIO.setup(self.AvoidSensorRight,GPIO.IN)
         GPIO.setup(self.LdrSensorLeft,GPIO.IN)
@@ -96,6 +102,10 @@ class Vehicle():
         #设置舵机的频率和起始占空比
         self.pwm_servo = GPIO.PWM(self.ServoPin, 50)
         self.pwm_servo.start(0)
+        self.cam_hor_servo = GPIO.PWM(self.CamHorPin, 50)
+        self.cam_hor_servo.start(0)
+        self.cam_ver_servo = GPIO.PWM(self.CamVerPin, 50)
+        self.cam_ver_servo.start(0)
         self.pwm_rled = GPIO.PWM(self.LED_R, 1000)
         self.pwm_gled = GPIO.PWM(self.LED_G, 1000)
         self.pwm_bled = GPIO.PWM(self.LED_B, 1000)
@@ -130,7 +140,7 @@ class Vehicle():
         GPIO.output(self.IN4, GPIO.HIGH)
         self.pwm_ENA.ChangeDutyCycle(self.carspeed)
         self.pwm_ENB.ChangeDutyCycle(self.carspeed)
-    	
+
     #小车左转	
     def left(self,CarSpeedControl=None):
         if CarSpeedControl:
@@ -193,7 +203,7 @@ class Vehicle():
                 while not GPIO.input(self.key):
                     pass
 
-    #超声波函数
+    # ultra sonic distance measurement
     def Distance_test(self):
         GPIO.output(self.TrigPin,GPIO.HIGH)
         time.sleep(0.000015)
@@ -230,17 +240,22 @@ class Vehicle():
 #        infrared_track_value = ''.join(infrared_track_value_list)
 #        
 #    
-#    #避障红外引脚测试
-#    def infrared_avoid_test():
-#        global infrared_avoid_value
-#        #遇到障碍物,红外避障模块的指示灯亮,端口电平为LOW
-#        #未遇到障碍物,红外避障模块的指示灯灭,端口电平为HIGH
-#        LeftSensorValue  = GPIO.input(AvoidSensorLeft)
-#        RightSensorValue = GPIO.input(AvoidSensorRight)
-#        infrared_avoid_value_list = ['0','0']
-#        infrared_avoid_value_list[0] = str(1 ^ LeftSensorValue)
-#        infrared_avoid_value_list[1] = str(1 ^ RightSensorValue)
-#        infrared_avoid_value = ''.join(infrared_avoid_value_list)
+    #避障红外引脚测试
+    def infrared_avoid(self):
+        #遇到障碍物,红外避障模块的指示灯亮,端口电平为LOW
+        #未遇到障碍物,红外避障模块的指示灯灭,端口电平为HIGH
+        LeftSensorValue  = GPIO.input(self.AvoidSensorLeft)
+        RightSensorValue = GPIO.input(self.AvoidSensorRight)
+        if (LeftSensorValue == 0) and (RightSensorValue == 0):
+            self.servo_appointed_detection(90)
+        elif LeftSensorValue == 0:
+            self.servo_appointed_detection(180)
+        elif RightSensorValue == 0:
+            self.servo_appointed_detection(0)
+        infrared_avoid_value_list = ['0','0']
+        infrared_avoid_value_list[0] = str(1 ^ LeftSensorValue)
+        infrared_avoid_value_list[1] = str(1 ^ RightSensorValue)
+        infrared_avoid_value = ''.join(infrared_avoid_value_list)
 #        	
 #    #寻光引脚测试
 #    def follow_light_test():
@@ -273,68 +288,75 @@ class Vehicle():
 
     def serialEvent(self):
         def serial_data_parse():
-            ReturnTemp = ''
+#            ReturnTemp = ''
             #解析上位机发来的通用协议指令,并执行相应的动作
             #如:$1,0,0,0,0,0,0,0,0,0#    小车前进
+            if len(self.InputString) > 17:
+                if self.InputString[3] == '1':
+                    self.carstatus = enTLEFT
+                    print("Car is spinning left!")
+                elif self.InputString[3] == '2':
+                    self.carstatus = enTRIGHT
+                    print("Car is spinning right!")
+                else :
+                    self.carstatus = enSTOP
 
-            if self.InputString[3] == '1':
-                g_CarState = enTLEFT
-            elif self.InputString[3] == '2':
-                g_CarState = enTRIGHT
-            else :
-                g_CarState = enSTOP
+                if self.InputString[5] == '1':
+                   self.whistle()
+                if self.InputString[7] == '1':
+                    self.carspeed += 20
+                if self.carspeed > 100:
+                    self.carspeed = 100
+                if self.InputString[7] == '2':
+                   self.carspeed -= 20
+                if self.carspeed < 20:
+                    self.carspeed = 20
+                if self.InputString[9] == '1':
+                    self.servo_appointed_detection(180)
+                if self.InputString[9] == '2':
+                    self.servo_appointed_detection(0)
+                if self.InputString[17] == '1':
+                    self.servo_appointed_detection(90)
+                if self.InputString[13] == '1':
+                    self.color_led_pwm(255, 255, 255)
+                if self.InputString[13] == '2':
+                    self.color_led_pwm(255, 0, 0)
+                if self.InputString[13] == '3':
+                    self.color_led_pwm(0, 255, 0)
+                if self.InputString[13] == '4':
+                    self.color_led_pwm(0, 0, 255)
+                if self.InputString[13] == '5':
+                    self.color_led_pwm(0, 255, 255)
+                if self.InputString[13] == '6':
+                    self.color_led_pwm(255, 0, 255)
+                if self.InputString[13] == '7':
+                    self.color_led_pwm(255, 255, 0)
+                if self.InputString[13] == '8':
+                    self.color_led_pwm(0,0,0)
 
-            if self.InputString[5] == '1':
-               self.whistle()
-            if self.InputString[7] == '1':
-                self.carspeed += 20
-            if self.carspeed > 100:
-                self.carspeed = 100
-            if self.InputString[7] == '2':
-               self.carspeed -= 20
-            if self.carspeed < 20:
-                self.carspeed = 20
-            if self.InputString[9] == '1':
-                self.servo_appointed_detection(180)
-            if self.InputString[9] == '2':
-                self.servo_appointed_detection(0)
-            if self.InputString[17] == '1':
-                self.servo_appointed_detection(90)
-            if self.InputString[13] == '1':
-                self.color_led_pwm(255, 255, 255)
-            if self.InputString[13] == '2':
-                self.color_led_pwm(255, 0, 0)
-            if self.InputString[13] == '3':
-                self.color_led_pwm(0, 255, 0)
-            if self.InputString[13] == '4':
-                self.color_led_pwm(0, 0, 255)
-            if self.InputString[13] == '5':
-                self.color_led_pwm(0, 255, 255)
-            if self.InputString[13] == '6':
-                self.color_led_pwm(255, 0, 255)
-            if self.InputString[13] == '7':
-                self.color_led_pwm(255, 255, 0)
-            if self.InputString[13] == '8':
-                self.color_led_pwm(0,0,0)
-
-            if self.InputString[15] == '1':
-                GPIO.output(self.OutfirePin,not GPIO.input(self.OutfirePin) )
-                time.sleep(1)
+                if self.InputString[15] == '1':
+                    GPIO.output(self.OutfirePin,not GPIO.input(self.OutfirePin) )
+                    time.sleep(1)
 
             if self.carstatus != enTLEFT and self.carstatus != enTRIGHT:
                 if self.InputString[1] == run_car:
                     self.carstatus = enRUN
-                    print("run car")
+                    print("Car is moving forward!")
                 elif self.InputString[1] == back_car:
                     self.carstatus = enBACK
+                    print("Car is moving backward!")
                 elif self.InputString[1] == left_car:
                     self.carstatus = enLEFT
+                    print("Car is turning left!")
                 elif self.InputString[1] == right_car:
                     self.carstatus = enRIGHT
+                    print("Car is turning right!")
                 elif self.InputString[1] == stop_car:
                     self.carstatus = enSTOP
+                    print("Car stopped!")
                 else:
                     self.carstatus = enSTOP
+                    print("Car stopped!")
             #采集的传感器数据串口回发给上位机显示				
 #            distance = Distance_test()
 #            ReturnTemp += "$0,0,0,0,0,0,0,0,0,0,0,"
@@ -410,73 +432,5 @@ class Vehicle():
                 self.brake()
             self.NewLineReceived = 0
 
-##    #采集的传感器数据串口回发给上位机显示				
-#    distance = Distance_test()
-#    ReturnTemp += "$0,0,0,0,0,0,0,0,0,0,0,"
-#    ReturnTemp += str(int(distance))
-#    ReturnTemp += "cm,8.4v#"		
-#    NewLineReceived = 0
-#    ser.write(ReturnTemp)
-#    InputString.zfill(len(InputString))	
-#		  	
-#def serialEvent():
-#    global InputString
-#    global InputStringcache
-#    global StartBit
-#    global NewLineReceived
-#    InputString = ''
-#    while True:
-#        size = ser.inWaiting()
-#        if size == 0:
-#            break
-#        else:
-#            while size != 0:
-#                serialdatabit = ser.read(1)
-#                size -= 1
-#                if serialdatabit == '$':
-#                    StartBit = 1
-#                if StartBit == 1:
-#                    InputStringcache += serialdatabit
-#                if StartBit == 1 and serialdatabit == '#':
-#                    NewLineReceived = 1
-#                    InputString = InputStringcache
-#                    InputStringcache = ''
-#                    StartBit = 0
-#                    size = 0
-#                    print InputString
-#
-#if __name__ == '__main__':
-#    try:
-#        ser = serial.Serial("/dev/ttyAMA0", 9600, timeout = 0.001)
-#        print "serial.isOpen() = ",ser.isOpen()
-#        ser.write("serial is on!")  
-#        init()
-#        while True:
-#            serialEvent()
-#         #   time.sleep(0.4)
-#        if NewLineReceived == 1:
-#                print "serialdata:%s" % InputString
-#            serial_data_parse()
-#            NewLineReceived = 0
-#            #print "nice to meet you"	
-#        if g_CarState == enSTOP:
-#            brake()
-#        elif g_CarState == enRUN:
-#            run()
-#        elif g_CarState == enLEFT:
-#            left()
-#        elif g_CarState == enRIGHT:
-#            right()
-#        elif g_CarState == enBACK:
-#            back()
-#        elif g_CarState == enTLEFT:
-#            spin_left()
-#        elif g_CarState == enTRIGHT:
-#            spin_right()
-#        else:
-#            brake()
-#
-#    except KeyboardInterrupt:
-#        pass
-#   #    def wechat_control():
+        self.infrared_avoid()
 
