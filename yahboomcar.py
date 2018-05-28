@@ -2,6 +2,8 @@ import RPi.GPIO as GPIO
 import time
 import string
 import serial
+import threading
+from threading import Thread
 
 #按键值定义
 run_car  = '1'  #按键前
@@ -25,6 +27,10 @@ class Vehicle():
         self.carspeed = speed
         self.carstatus = enSTOP
         self.infrared_avoid_value = ''
+        self.distance = 0
+
+        # Threading lock
+        self.lock = threading.Lock()
 
         #设置GPIO口为BCM编码方式
         GPIO.setmode(GPIO.BCM)
@@ -118,7 +124,7 @@ class Vehicle():
         self.NewLineReceived = 0
         self.StartBit = 0
         self.ser = serial.Serial("/dev/ttyAMA0", 9600, timeout = 0)
-        print('serial.isOpen() =', self.ser.isOpen()) 
+        print('serial.isOpen() =', self.ser.isOpen())
 
     def run(self, CarSpeedControl=None):
         if CarSpeedControl:
@@ -205,18 +211,40 @@ class Vehicle():
 
     # ultra sonic distance measurement
     def Distance_test(self):
-        GPIO.output(self.TrigPin,GPIO.HIGH)
-        time.sleep(0.000015)
-        GPIO.output(self.TrigPin,GPIO.LOW)
-        while not GPIO.input(self.EchoPin):
-            pass
+        # Flag to indicate whether distance updated or not
+        distance_updated = 0
+        while self.on:
+            self.lock.acquire()
+            print("get lock")
+            GPIO.output(self.TrigPin,GPIO.HIGH)
+            time.sleep(0.000015)
+            GPIO.output(self.TrigPin,GPIO.LOW)
+            t0 = time.time()
+            while not GPIO.input(self.EchoPin):
+                t_buff = time.time()
+                distance_updated = 1
+                if (t_buff-t0)>1:
+                    distance_updated = 0
+                    break
+                pass
             t1 = time.time()
-        while GPIO.input(self.EchoPin):
-            pass
+            while GPIO.input(self.EchoPin):
+                t_buff = time.time()
+                distance_updated = 1
+                if (t_buff-t1)>1:
+                    distance_updated = 0
+                    break
+                pass
             t2 = time.time()
-        print("distance is %d " % (((t2 - t1)* 340 / 2) * 100))
-        time.sleep(0.01)
-        return ((t2 - t1)* 340 / 2) * 100
+            if distance_updated:
+                self.distance = ((t2 - t1)* 340 / 2) * 100
+            self.lock.release()
+            time.sleep(1)
+            if distance_updated:
+                print("distance is %d " % self.distance)
+            else:
+                print("distance is not updated!")
+#        return int(distance)
 
     #舵机旋转到指定角度
     def servo_appointed_detection(self, pos):
@@ -247,6 +275,8 @@ class Vehicle():
         LeftSensorValue  = GPIO.input(self.AvoidSensorLeft)
         RightSensorValue = GPIO.input(self.AvoidSensorRight)
         if (LeftSensorValue == 0) and (RightSensorValue == 0):
+            self.servo_appointed_detection(90)
+        elif (LeftSensorValue == 1) and (RightSensorValue == 1):
             self.servo_appointed_detection(90)
         elif LeftSensorValue == 0:
             self.servo_appointed_detection(180)
@@ -387,6 +417,12 @@ class Vehicle():
                         serial_data_parse()
                         print (self.InputString)
 
+    def print_status(self, delay):
+        while self.on:
+            time.sleep(delay)
+            print ("%s: %s" % ("Now it's", time.ctime(time.time())))
+            print(self.distance)
+
     def stop(self):
         self.ser.close()
         self.pwm_ENA.stop()
@@ -401,9 +437,23 @@ class Vehicle():
         """
         start the vehicle main drive loop
         """
+        t_ser = Thread(target=self.serialEvent)
+        t_ser.setDaemon(True)
+
+        t_actor = Thread(target=self.update)
+        t_actor.setDaemon(True)
+
+#        t = Thread(target=self.print_status, args=(2,))
+        t = Thread(target=self.Distance_test)
+        t.setDaemon(True)
+
         try:
             self.on = True
+#            t_ser.start()
+#            t_actor.start()
+            t.start()
             while self.on:
+#                self.distance = self.Distance_test()
                 self.serialEvent()
                 self.update()
         except KeyboardInterrupt:
@@ -432,5 +482,5 @@ class Vehicle():
                 self.brake()
             self.NewLineReceived = 0
 
-        self.infrared_avoid()
-
+#        self.infrared_avoid()
+#        self.Distance_test()
