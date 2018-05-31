@@ -17,6 +17,8 @@ import os
 from docopt import docopt
 from memory import Memory
 from threading import Thread
+from camera import StreamingOutput, StreamingServer, StreamingHandler, webcam_recording, PAGE, output
+
 
 def train_cmd_test(para = None):
     if not para:

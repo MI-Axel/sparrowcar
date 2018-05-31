@@ -3,7 +3,12 @@ import time
 import string
 import serial
 import threading
+import picamera
 from threading import Thread
+from camera import StreamingOutput, StreamingHandler, StreamingServer
+
+# global variables for camera output
+output = StreamingOutput()
 
 #按键值定义
 run_car  = '1'  #按键前
@@ -24,13 +29,14 @@ class Vehicle():
     def __init__(self, speed=30.):
         #Vehicle status variables
         self.on = True
+        self.camera_on = False
         self.carspeed = speed
         self.carstatus = enSTOP
         self.infrared_avoid_value = ''
         self.distance = 0
 
         # Threading lock
-        self.lock = threading.Lock()
+        self.rlock = threading.RLock()
 
         #设置GPIO口为BCM编码方式
         GPIO.setmode(GPIO.BCM)
@@ -118,6 +124,11 @@ class Vehicle():
         self.pwm_rled.start(0)
         self.pwm_gled.start(0)
         self.pwm_bled.start(0)
+        # configure the camera of vehicle
+        self.cam = picamera.PiCamera()
+        self.cam.resolution = (640,480)
+        self.cam.framerate = 24
+        self.video_output = StreamingOutput()
         # define the serial port parameters
         self.InputString = ''
         self.InputStringcache = ''.encode()
@@ -214,8 +225,6 @@ class Vehicle():
         # Flag to indicate whether distance updated or not
         distance_updated = 0
         while self.on:
-            self.lock.acquire()
-            print("get lock")
             GPIO.output(self.TrigPin,GPIO.HIGH)
             time.sleep(0.000015)
             GPIO.output(self.TrigPin,GPIO.LOW)
@@ -237,14 +246,15 @@ class Vehicle():
                 pass
             t2 = time.time()
             if distance_updated:
+                self.rlock.acquire()
                 self.distance = ((t2 - t1)* 340 / 2) * 100
-            self.lock.release()
-            time.sleep(1)
+                self.rlock.release()
             if distance_updated:
                 print("distance is %d " % self.distance)
             else:
                 print("distance is not updated!")
-#        return int(distance)
+            time.sleep(1)
+#        return int(distance
 
     #舵机旋转到指定角度
     def servo_appointed_detection(self, pos):
@@ -417,6 +427,13 @@ class Vehicle():
                         serial_data_parse()
                         print (self.InputString)
 
+    def webcam_recording(self):
+        global output
+        self.cam.start_recording(output, format='mjpeg')
+        server = StreamingServer(('',8000), StreamingHandler)
+        print(output)
+        server.serve_forever()
+
     def print_status(self, delay):
         while self.on:
             time.sleep(delay)
@@ -425,6 +442,7 @@ class Vehicle():
 
     def stop(self):
         self.ser.close()
+#        self.cam.stop_recording()
         self.pwm_ENA.stop()
         self.pwm_ENB.stop()
         self.pwm_rled.stop()
@@ -447,13 +465,18 @@ class Vehicle():
         t = Thread(target=self.Distance_test)
         t.setDaemon(True)
 
+#        t_camera = Thread(target=self.webcam_recording)
+#        t_camera.setDaemon(True)
+
         try:
             self.on = True
 #            t_ser.start()
 #            t_actor.start()
             t.start()
+            if self.camera_on:
+                t_camera.start()
+#            self.webcam_recording()
             while self.on:
-#                self.distance = self.Distance_test()
                 self.serialEvent()
                 self.update()
         except KeyboardInterrupt:
@@ -480,7 +503,13 @@ class Vehicle():
                 self.spin_right()
             else:
                 self.brake()
+            self.rlock.acquire()
             self.NewLineReceived = 0
-
+            self.rlock.release()
+        if self.distance < 30:
+            GPIO.output(self.OutfirePin, GPIO.LOW)
+            self.color_led_pwm(255, 0, 0)
+        elif self.distance >35:
+            GPIO.output(self.OutfirePin, GPIO.HIGH)
+            self.color_led_pwm(0, 255, 0)
 #        self.infrared_avoid()
-#        self.Distance_test()
